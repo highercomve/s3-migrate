@@ -1,0 +1,4 @@
+.vscode
+.config*.yaml
+s3-migrate
+profile.cpu

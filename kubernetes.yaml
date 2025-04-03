@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: s3-migrate-config
+data:
+    s3-migrate.yaml: |
+        # Your configuration here
+        source-key: "your-source-key"
+        source-secret: "your-source-secret"
+        source-region: "your-source-region"
+        source-bucket: "your-source-bucket"
+        source-endpoint: "your-source-endpoint"
+        dest-key: "your-dest-key"
+        dest-secret: "your-dest-secret"
+        dest-region: "your-dest-region"
+        dest-bucket: "your-dest-bucket"
+        dest-endpoint: "your-dest-endpoint"
+        database: "your-database"
+        collection: "your-collection"
+        connection: "your-connection-url"
+        filter: '{"sizeint":{"$gt": 0}}'
+        limit: 100
+        ratelimit: 0
+        concurrency: 0
+        dry-run: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: s3-migrate-deployment
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            app: s3-migrate
+    template:
+        metadata:
+            labels:
+                app: s3-migrate
+        spec:
+            containers:
+                - name: s3-migrate
+                  image: your-docker-image:latest
+                  command: ["sh"]
+                  volumeMounts:
+                      - name: config-volume
+                        mountPath: /app/s3-migrate.yaml
+            volumes:
+                - name: config-volume
+                  configMap:
+                      name: s3-migrate-config
