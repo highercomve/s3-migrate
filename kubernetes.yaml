@@ -40,7 +40,7 @@ spec:
         spec:
             containers:
                 - name: s3-migrate
-                  image: your-docker-image:latest
+                  image: ghcr.io/highercomve/s3-migrate:main
                   command: ["sh"]
                   volumeMounts:
                       - name: config-volume
