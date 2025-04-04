@@ -67,6 +67,7 @@ func init() {
 	rootCmd.Flags().Int64P("limit", "l", 100, "Request limit")
 	rootCmd.Flags().Int64("ratelimit", 0, "rate limit per second to search for objects in s3")
 	rootCmd.Flags().Int64("concurrency", 0, "concurrency level")
+	rootCmd.Flags().Bool("dry-run", false, "perform a trial run with no changes made")
 
 	viper.BindPFlags(rootCmd.Flags())
 }
