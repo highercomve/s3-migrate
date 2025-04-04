@@ -33,6 +33,57 @@ The `s3-migrate` tool can be run from the command line with various flags to con
 ./s3-migrate --source-key <SOURCE_ACCESS_KEY> --source-secret <SOURCE_SECRET> --source-region <SOURCE_REGION> --source-bucket <SOURCE_BUCKET> --source-endpoint <SOURCE_ENDPOINT> --dest-key <DEST_ACCESS_KEY> --dest-secret <DEST_SECRET> --dest-region <DEST_REGION> --dest-bucket <DEST_BUCKET> --dest-endpoint <DEST_ENDPOINT> --database <DATABASE_NAME> --collection <COLLECTION_NAME> --connection <MONGO_CONNECTION_URL> --filter '{"sizeint":{"$gt": 0}}' --limit 100 --ratelimit 10 --concurrency 5 --dry-run
 ```
 
+Alternatively, you can use a configuration file named `s3-migrate.yaml` in the current folder to specify the configuration instead of using flags. The tool will automatically detect and use this file if present.
+
+### Example `s3-migrate.yaml`
+
+```yaml
+# Source S3 Configuration
+source-key: "your_source_access_key"
+source-secret: "your_source_secret_key"
+source-region: "us-east-1"
+source-bucket: "source-bucket-name"
+source-endpoint: "s3.amazonaws.com"  # Optional, defaults to s3.amazonaws.com
+
+# Destination S3 Configuration
+dest-key: "your_dest_access_key"
+dest-secret: "your_dest_secret_key"
+dest-region: "us-west-2"
+dest-bucket: "destination-bucket-name"
+dest-endpoint: "s3.amazonaws.com"  # Optional, defaults to s3.amazonaws.com
+
+# MongoDB Configuration
+database: "your_database_name"
+collection: "your_collection_name"
+connection: "mongodb://username:password@localhost:27017"
+filter: '{"sizeint":{"$gt": 0}}'  # Example filter for objects with size > 0
+
+# Performance Settings
+limit: 100  # Number of documents to process per batch
+ratelimit: 10  # Rate limit for S3 operations per second
+
+# Optional Settings
+cpuprofile: "profile.cpu"  # Optional, for CPU profiling
+```
+
+### Running with Docker
+
+You can also run the `s3-migrate` tool using Docker. Pull the Docker image from GitHub Container Registry and run it with the necessary flags:
+
+```sh
+docker pull ghcr.io/highercomve/s3-migrate:main
+docker run --rm ghcr.io/highercomve/s3-migrate:main \
+  --source-key <SOURCE_ACCESS_KEY> --source-secret <SOURCE_SECRET> --source-region <SOURCE_REGION> --source-bucket <SOURCE_BUCKET> --source-endpoint <SOURCE_ENDPOINT> \
+  --dest-key <DEST_ACCESS_KEY> --dest-secret <DEST_SECRET> --dest-region <DEST_REGION> --dest-bucket <DEST_BUCKET> --dest-endpoint <DEST_ENDPOINT> \
+  --database <DATABASE_NAME> --collection <COLLECTION_NAME> --connection <MONGO_CONNECTION_URL> --filter '{"sizeint":{"$gt": 0}}' --limit 100 --ratelimit 10 --concurrency 5 --dry-run
+```
+
+Alternatively, you can use a configuration file named `s3-migrate.yaml` and mount it into the Docker container:
+
+```sh
+docker run --rm -v $(pwd)/s3-migrate.yaml:/app/s3-migrate.yaml ghcr.io/highercomve/s3-migrate:main
+```
+
 ### Flags
 
 - **Config and Profiling Flags**:
