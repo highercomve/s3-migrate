@@ -218,28 +218,28 @@ func migrateObjects(ctx context.Context, params *S3MigrationParams, totalCount i
 			}
 
 			// Get object SHA from document
-			objectSHA := doc.ID
+			storageID := doc.StorageID
 
 			// Check if object exists in source bucket
-			exists, err := sourceClient.ObjectExist(ctx, objectSHA)
+			exists, err := sourceClient.ObjectExist(ctx, storageID)
 			if err != nil {
-				log.Printf("Error checking object %s: %v", objectSHA, err)
+				log.Printf("Error checking object %s: %v", storageID, err)
 				continue
 			}
 
 			if !exists {
-				log.Printf("Object %s not found in source bucket", objectSHA)
+				log.Printf("Object %s not found in source bucket", storageID)
 				continue
 			}
 
 			if params.DryRun {
-				log.Printf("Dry Run: Would copy object %s from source to destination", objectSHA)
+				log.Printf("Dry Run: Would copy object %s from source to destination", storageID)
 				continue
 			}
 
 			// Copy object from source to destination
-			if err := destClient.CopyObject(ctx, sourceClient, objectSHA, params.DryRun); err != nil {
-				log.Printf("Error copying object %s: %v", objectSHA, err)
+			if err := destClient.CopyObject(ctx, sourceClient, storageID, params.DryRun); err != nil {
+				log.Printf("Error copying object %s: %v", storageID, err)
 				continue
 			}
 		}
