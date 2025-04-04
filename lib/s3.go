@@ -6,6 +6,7 @@ package lib
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -118,63 +119,39 @@ func (s *S3Client) CopyObject(ctx context.Context, source *S3Client, objectSHA s
 		return nil
 	}
 
-	// For server-side copy, we need to simulate progress
-	done := make(chan struct{})
-	go func() {
-		// Update progress bar until done
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
+	// Get object from source as a stream
+	object, err := source.client.GetObject(ctx, source.bucket, objectSHA, minio.GetObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("error getting object from source: %v", err)
+	}
+	defer object.Close()
 
+	// Create a pipe to stream data and update progress bar
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		buf := make([]byte, 32*1024) // 32KB buffer
 		for {
-			select {
-			case <-done:
-				bar.Finish()
-				return
-			case <-ticker.C:
-				// Check if copy is still in progress
-				_, err := s.client.StatObject(ctx, s.bucket, objectSHA, minio.StatObjectOptions{})
-				if err == nil {
-					// Object exists in destination, copy is complete
-					bar.Set64(objectInfo.Size)
-					return
+			n, err := object.Read(buf)
+			if n > 0 {
+				pw.Write(buf[:n])
+				bar.Add(n)
+			}
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("error reading object: %v", err)
 				}
-				// Show some progress to indicate the copy is ongoing
-				current := bar.State().CurrentBytes
-				if current < float64(objectInfo.Size) {
-					// Increment by ~5% of file size as a visual indicator
-					increment := objectInfo.Size / 20
-					if increment < 1 {
-						increment = 1
-					}
-					newPos := int64(current) + increment
-					if newPos > objectInfo.Size {
-						newPos = objectInfo.Size
-					}
-					bar.Set64(newPos)
-				}
+				break
 			}
 		}
 	}()
 
-	// Define source info
-	srcOpts := minio.CopySrcOptions{
-		Bucket: source.bucket,
-		Object: objectSHA,
-	}
-
-	// Define destination info
-	dstOpts := minio.CopyDestOptions{
-		Bucket: s.bucket,
-		Object: objectSHA,
-	}
-
-	// Perform server-side copy
-	_, err = s.client.CopyObject(ctx, dstOpts, srcOpts)
-	close(done) // Signal that the copy operation is done
-
+	// Put object in destination as a stream
+	_, err = s.client.PutObject(ctx, s.bucket, objectSHA, pr, objectInfo.Size, minio.PutObjectOptions{})
 	if err != nil {
-		return fmt.Errorf("error copying object: %v", err)
+		return fmt.Errorf("error putting object in destination: %v", err)
 	}
 
+	bar.Finish()
 	return nil
 }
