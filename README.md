@@ -15,6 +15,22 @@ The `s3-migrate` tool is designed to facilitate the migration of objects from a 
 - **CPU Profiling**: Enable CPU profiling to analyze the performance of the migration process.
 - **Progress Bar**: Visual feedback on the progress of each object being copied.
 
+## MongoDB Collection Structure
+
+The MongoDB collection used for determining which objects to migrate has the following structure:
+
+- `id`: A unique identifier for the object.
+- `_id`: The storage ID of the object.
+- `owner`: The owner of the object.
+- `objectname`: The name of the object.
+- `sha256sum`: The SHA-256 checksum of the object.
+- `size`: The size of the object as a string.
+- `sizeint`: The size of the object as an integer.
+- `mime-type`: The MIME type of the object.
+- `linked_object`: A linked object (optional).
+- `timecreated`: The time when the object was created.
+- `timemodified`: The time when the object was last modified.
+
 ## Installation
 
 To install the `s3-migrate` tool, clone the repository and build the project using Go:

@@ -27,7 +27,7 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-    name: s3-migrate-deployment
+    name: s3-migrate
 spec:
     replicas: 1
     selector:

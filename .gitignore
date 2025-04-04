@@ -2,3 +2,4 @@
 .config*.yaml
 s3-migrate
 profile.cpu
+.kubernetes*.yaml

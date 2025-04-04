@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"runtime/pprof"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -29,6 +30,21 @@ type S3MigrationParams struct {
 	Limit       int64
 	RateLimit   int64
 	DryRun      bool
+}
+
+type Object struct {
+	ID           string `json:"id" bson:"id"`
+	StorageID    string `json:"storage-id" bson:"_id"`
+	Owner        string `json:"owner"`
+	ObjectName   string `json:"objectname"`
+	Sha          string `json:"sha256sum"`
+	Size         string `json:"size"`
+	SizeInt      int64  `json:"sizeint"`
+	MimeType     string `json:"mime-type"`
+	initialized  bool
+	LinkedObject string    `json:"-" bson:"linked_object"`
+	TimeCreated  time.Time `json:"time-created" bson:"timecreated"`
+	TimeModified time.Time `json:"time-modified" bson:"timemodified"`
 }
 
 func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
@@ -189,7 +205,7 @@ func migrateObjects(ctx context.Context, params *S3MigrationParams, totalCount i
 		}
 
 		for cursor.Next(ctx) {
-			var doc map[string]any
+			var doc Object
 			if err := cursor.Decode(&doc); err != nil {
 				return err
 			}
@@ -202,11 +218,7 @@ func migrateObjects(ctx context.Context, params *S3MigrationParams, totalCount i
 			}
 
 			// Get object SHA from document
-			objectSHA, ok := doc["sha"].(string)
-			if !ok {
-				log.Printf("Warning: Invalid sha in document: %v", doc)
-				continue
-			}
+			objectSHA := doc.ID
 
 			// Check if object exists in source bucket
 			exists, err := sourceClient.ObjectExist(ctx, objectSHA)
