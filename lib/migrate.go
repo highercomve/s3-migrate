@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"runtime/pprof"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -30,6 +32,7 @@ type S3MigrationParams struct {
 	Limit       int64
 	RateLimit   int64
 	DryRun      bool
+	Concurrency int64
 }
 
 type Object struct {
@@ -45,6 +48,17 @@ type Object struct {
 	LinkedObject string    `json:"-" bson:"linked_object"`
 	TimeCreated  time.Time `json:"time-created" bson:"timecreated"`
 	TimeModified time.Time `json:"time-modified" bson:"timemodified"`
+}
+
+type MigrationReport struct {
+	TotalObjects         int64         `json:"total_objects"`
+	Copied               int64         `json:"copied"`
+	Skipped              int64         `json:"skipped"`
+	AlreadyInDestination int64         `json:"already_in_destination"`
+	Errors               int64         `json:"errors"`
+	StartTime            time.Time     `json:"start_time"`
+	EndTime              time.Time     `json:"end_time"`
+	Duration             time.Duration `json:"duration"`
 }
 
 func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
@@ -70,6 +84,10 @@ func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
 	ratelimit := viper.GetInt64("ratelimit")
 	filterString := viper.GetString("filter")
 	dryRun := viper.GetBool("dry-run")
+	concurrency := viper.GetInt64("concurrency")
+	if concurrency == 0 {
+		concurrency = int64(runtime.NumCPU())
+	}
 
 	// Print configuration
 	fmt.Printf("\nMigration Configuration:\n")
@@ -86,6 +104,7 @@ func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
 	if dryRun {
 		fmt.Printf("Dry Run: Enabled\n")
 	}
+	fmt.Printf("Concurrency Level: %d\n", concurrency)
 
 	// CPU profiling
 	cpuprofile := viper.GetString("cpuprofile")
@@ -170,6 +189,7 @@ func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
 		Limit:       limit,
 		RateLimit:   ratelimit,
 		DryRun:      dryRun,
+		Concurrency: concurrency,
 	}
 
 	// Start migration
@@ -177,6 +197,8 @@ func MigrateStorage(cmd *cobra.Command, args []string) (err error) {
 }
 
 func migrateObjects(ctx context.Context, params *S3MigrationParams, totalCount int64, limiter *rate.Limiter) error {
+	startTime := time.Now()
+
 	sourceClient, err := NewS3Connect(ctx, params.Source)
 	if err != nil {
 		return err
@@ -187,66 +209,128 @@ func migrateObjects(ctx context.Context, params *S3MigrationParams, totalCount i
 		return err
 	}
 
-	// Calculate pagination
-	pages := totalCount / params.Limit
-	if totalCount%params.Limit != 0 {
-		pages++
+	// Create worker pool
+	var wg sync.WaitGroup
+	objectChan := make(chan Object, params.Concurrency)
+
+	// Statistics tracking
+	var copiedCount, skippedCount, alreadyExistsCount, errorCount int64
+
+	// Start workers
+	for i := int64(0); i < params.Concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for doc := range objectChan {
+				// Apply rate limiting if configured
+				if limiter != nil {
+					if err := limiter.Wait(ctx); err != nil {
+						log.Printf("Rate limiter error: %v", err)
+						errorCount++
+						continue
+					}
+				}
+
+				// Get object SHA from document
+				storageID := doc.StorageID
+				// Check if object exists in source bucket
+				exists, err := sourceClient.ObjectExist(ctx, storageID)
+				if err != nil {
+					log.Printf("Error checking object %s: %v", storageID, err)
+					errorCount++
+					continue
+				}
+
+				if !exists {
+					log.Printf("Object %s not found in source bucket", storageID)
+					skippedCount++
+					continue
+				}
+
+				// Check if object exists in destination bucket with the same SHA
+				destExists, err := destClient.ObjectExist(ctx, storageID)
+				if err != nil {
+					log.Printf("Error checking object %s in destination bucket: %v", storageID, err)
+					errorCount++
+					continue
+				}
+
+				if destExists {
+					log.Printf("Object %s already exists in destination bucket with matching SHA. Skipping copy.", storageID)
+					alreadyExistsCount++
+					continue
+				}
+
+				if params.DryRun {
+					log.Printf("Dry Run: Would copy object %s from source to destination", storageID)
+					copiedCount++
+					continue
+				}
+
+				// Copy object from source to destination
+				if err := destClient.CopyObject(ctx, sourceClient, storageID, params.DryRun); err != nil {
+					log.Printf("Error copying object %s: %v", storageID, err)
+					errorCount++
+					continue
+				}
+
+				copiedCount++
+			}
+		}()
 	}
 
-	// Process each page
-	for page := int64(0); page < pages; page++ {
-		skip := page * params.Limit
-		cursor, err := params.Collection.Find(ctx, params.Filter, &options.FindOptions{
-			Skip:  &skip,
-			Limit: &params.Limit,
-		})
-		if err != nil {
-			return err
+	// Fetch documents and send to workers
+	cursor, err := params.Collection.Find(ctx, params.Filter, &options.FindOptions{})
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var doc Object
+		if err := cursor.Decode(&doc); err != nil {
+			log.Printf("Error decoding document: %v", err)
+			errorCount++
+			continue
 		}
+		objectChan <- doc
+	}
 
-		for cursor.Next(ctx) {
-			var doc Object
-			if err := cursor.Decode(&doc); err != nil {
-				return err
-			}
+	close(objectChan)
+	wg.Wait()
 
-			// Apply rate limiting if configured
-			if limiter != nil {
-				if err := limiter.Wait(ctx); err != nil {
-					return err
-				}
-			}
+	endTime := time.Now()
+	duration := time.Since(startTime)
 
-			// Get object SHA from document
-			storageID := doc.StorageID
+	// Final summary report
+	report := MigrationReport{
+		TotalObjects:         totalCount,
+		Copied:               copiedCount,
+		Skipped:              skippedCount,
+		AlreadyInDestination: alreadyExistsCount,
+		Errors:               errorCount,
+		StartTime:            startTime,
+		EndTime:              endTime,
+		Duration:             duration,
+	}
 
-			// Check if object exists in source bucket
-			exists, err := sourceClient.ObjectExist(ctx, storageID)
-			if err != nil {
-				log.Printf("Error checking object %s: %v", storageID, err)
-				continue
-			}
-
-			if !exists {
-				log.Printf("Object %s not found in source bucket", storageID)
-				continue
-			}
-
-			if params.DryRun {
-				log.Printf("Dry Run: Would copy object %s from source to destination", storageID)
-				continue
-			}
-
-			// Copy object from source to destination
-			if err := destClient.CopyObject(ctx, sourceClient, storageID, params.DryRun); err != nil {
-				log.Printf("Error copying object %s: %v", storageID, err)
-				continue
-			}
-		}
-
-		if err := cursor.Close(ctx); err != nil {
-			return err
-		}
+	fmt.Println("\nMigration Summary Report:")
+	fmt.Printf("Total Objects: %d\n", report.TotalObjects)
+	fmt.Printf("Copied: %d\n", report.Copied)
+	fmt.Printf("Skipped (not found in source): %d\n", report.Skipped)
+	fmt.Printf("Already in Destination: %d\n", report.AlreadyInDestination)
+	fmt.Printf("Errors: %d\n", report.Errors)
+	fmt.Printf("Start Time: %s\n", report.StartTime)
+	fmt.Printf("End Time: %s\n", report.EndTime)
+	fmt.Printf("Duration: ")
+	if report.Duration.Hours() >= 1 {
+		fmt.Printf("%.2f hours\n", report.Duration.Hours())
+	} else if report.Duration.Minutes() >= 1 {
+		fmt.Printf("%.2f minutes\n", report.Duration.Minutes())
+	} else if report.Duration.Seconds() >= 1 {
+		fmt.Printf("%.2f seconds\n", report.Duration.Seconds())
+	} else {
+		fmt.Printf("%d milliseconds\n", report.Duration.Milliseconds())
 	}
 
 	fmt.Println("\nMigration completed!")
